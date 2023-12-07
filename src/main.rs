@@ -8,7 +8,9 @@ use rocket::request::Request;
 use rocket::response::{self, Response};
 use rocket::http::ContentType;
 use regex::Regex;
-use unescape::unescape;
+use base64::{engine, alphabet, Engine as _};
+use rocket::http::{Cookie, CookieJar};
+use base64::engine::general_purpose;
 use serde_json::json;
 use std::collections::HashMap;
 use rocket::serde::json::Json;
@@ -51,15 +53,42 @@ struct MyResponder {
 impl<'r> Responder<'r,'r> for MyResponder {
     fn respond_to(self, _: &rocket::Request<'_>) -> response::Result<'static> {
           let body = json!(self.data).to_string();
- 
-//	//println!("json string {:?}", &json_string);
-  //      let json_body: response::Result<'r> = serde_json::from_str(unescape(&json_string).unwrap().as_str()).unwrap();
-        Response::build()
+          Response::build()
             .status(self.status)
             .header(ContentType::JSON)
 	    .sized_body(body.len(), Cursor::new(body))
             .ok()
     }
+}
+
+#[get("/7/decode")]
+fn decode_cookie<'a>(decode: &'a CookieJar<'_>) -> MyResponder {
+   let mut cstring: HashMap<String, usize> = HashMap::new();
+   for c in decode.iter() {
+      if c.name() == "recipe" {
+          let answer = c.value().as_bytes();
+	  let encoded: String = general_purpose::STANDARD_NO_PAD.encode(b"data");
+	  //println!("all encoded {:?}", encoded);
+	  let gen_purpose: Vec<u8>= general_purpose::STANDARD_NO_PAD.decode(answer).unwrap();
+	  let final_purpose = String::from_utf8(gen_purpose.to_vec()).unwrap();
+	  let s = final_purpose.replace(&['(', ')', '{', '}', '\"', '.', ';', '\''][..], "");
+	  let re = Regex::new(r"(:|,)").unwrap();
+	  let splitted_string: Vec<_> = re.split(&s).collect();
+	  let mut ingredient = "";
+	  let mut weight: usize = 0;
+	  for splitted_str in splitted_string.iter() {
+	     if let Err(_) = splitted_str.parse::<usize>() {
+	         ingredient = splitted_str;
+		 println!("ingredient {:?}", &ingredient);
+		 }
+	     else {
+		 weight = splitted_str.parse::<usize>().unwrap();
+		 }
+	     cstring.insert(ingredient.to_string(), weight);
+	  }	 
+	  }
+      }
+   MyResponder { status: Status::Ok, data: cstring }
 }
 
 #[post("/6", format="text/plain", data="<elves>")]
@@ -71,11 +100,9 @@ fn elf_count(elves: &str) -> MyResponder {
    let shre = Regex::new(r"shelf.");
    let mut noel: Vec<_> = shre.expect("issue splitting").split(noelves).collect();
    noel.retain(|&noe| noe!="");
-   println!("noel is {:?}", &noel);
    let nore = Regex::new(r"elf on (a|that) (shelf.|shelf)").unwrap();
    let mut shelves: Vec<_> = nore.split(strelves).collect();
    shelves.retain(|&item| item!="");
-   println!("shelves are {:?}", shelves);
    let mut shelf_count: usize = shelves.len() - 1;
    let mut noelf_count: usize = noel.len() - shelves.len();
    println!("noelves - shelves are {:?}", noelf_count);
@@ -93,9 +120,7 @@ fn elf_count(elves: &str) -> MyResponder {
    if noelf_count > 0 {
        jstring.insert("shelf with no elf on it".to_string(), noelf_count);
        }
-   println!("jstring is {:?}", jstring);
    MyResponder { status: Status::Ok, data: jstring }
-   //Json(MyResponder {elf: elf_count, shelf: shelf_count, noelf: noelf_count})
 }
 
 #[post("/4/strength", format = "application/json", data="<strength>")]
@@ -128,7 +153,7 @@ pub fn integer_this(it: PathBuf) -> String {
 
 #[shuttle_runtime::main]
 async fn main() -> shuttle_rocket::ShuttleRocket {
-    let rocket = rocket::build().mount("/", routes![index, fake, integer_this, calc_strength, elf_count]);
+    let rocket = rocket::build().mount("/", routes![index, fake, integer_this, calc_strength, elf_count, decode_cookie]);
 
     Ok(rocket.into())
 }
