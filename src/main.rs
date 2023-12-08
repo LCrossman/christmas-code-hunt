@@ -61,11 +61,47 @@ impl<'r> Responder<'r,'r> for MyResponder {
     }
 }
 
+#[derive(Debug, Deserialize, serde::Serialize)]
+pub struct TopResponse {
+   recipe: BakeResponse,
+   pantry: BakeResponse,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+pub struct BakeResponse {
+   flour: usize,
+   sugar: usize,
+   butter: usize,
+   #[serde(rename = "baking powder")]
+   baking_powder: usize,
+   #[serde(rename = "chocolate chips")]
+   chocolate_chips: usize,
+}
+
+#[get("/7/bake")]
+fn bake_cookies<'a>(bake: &'a CookieJar<'_>) -> Json<TopResponse> { 
+   let mut bstring: HashMap<String, HashMap<String,usize>> = HashMap::new();
+   let purs = "";
+   let spur: TopResponse = TopResponse { recipe: BakeResponse {flour:0,sugar:0,butter:0,baking_powder:0,chocolate_chips:0}, pantry: BakeResponse { flour:0,sugar:0,butter:0,baking_powder:0,chocolate_chips:0} };
+   for b in bake.iter() {
+       if b.name() == "recipe" {
+          let answer = b.value().as_bytes();
+	  let answer_decoded: Vec<u8> = general_purpose::STANDARD_NO_PAD.decode(answer).unwrap();
+	  let final_purpose = String::from_utf8(answer_decoded).unwrap();
+	  let json_purpose = format!(r#"{}"#, &final_purpose);
+	  let spur: Result<TopResponse> = serde_json::from_str(&final_purpose);
+	  println!("spur {:?}", &spur);
+	}
+    }
+    Json(spur)
+}
+
 #[get("/7/decode")]
 fn decode_cookie<'a>(decode: &'a CookieJar<'_>) -> MyResponder {
    let mut cstring: HashMap<String, usize> = HashMap::new();
    for c in decode.iter() {
       if c.name() == "recipe" {
+          let ans = c.value().replace(&['='][..],"");
           let answer = c.value().as_bytes();
 	  let encoded: String = general_purpose::STANDARD_NO_PAD.encode(b"data");
 	  //println!("all encoded {:?}", encoded);
@@ -153,7 +189,7 @@ pub fn integer_this(it: PathBuf) -> String {
 
 #[shuttle_runtime::main]
 async fn main() -> shuttle_rocket::ShuttleRocket {
-    let rocket = rocket::build().mount("/", routes![index, fake, integer_this, calc_strength, elf_count, decode_cookie]);
+    let rocket = rocket::build().mount("/", routes![index, fake, integer_this, calc_strength, elf_count, decode_cookie, bake_cookies]);
 
     Ok(rocket.into())
 }
