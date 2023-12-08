@@ -78,6 +78,30 @@ pub struct BakeResponse {
    chocolate_chips: usize,
 }
 
+#[derive(Debug)]
+pub struct Pokemon {
+   weight: usize,
+}
+
+
+#[get("/8/weight/<val>")]
+async fn get_weight(val: &str) -> String {
+   let query_string = format!("https://pokeapi.co/api/v2/pokemon/{}",val.parse::<usize>().unwrap());
+   let body = reqwest::get(query_string).await.expect("problem").text();
+   let mut long_body: String = body.await.expect("issue");
+   let mut split_body: Vec<_> = long_body.split(",").collect::<Vec<_>>();
+   let re = Regex::new(r"(:|})").unwrap();
+   let popped: Vec<_> = re.split(&split_body.last().unwrap()).collect();
+   let mut answer: String = String::new();
+   for splitted_str in popped.iter() {
+      if let Ok(weight) = splitted_str.parse::<usize>() {
+          let ans = weight/10;
+          answer = ans.to_string();
+   }
+   }
+   answer
+}
+
 #[get("/7/bake")]
 fn bake_cookies<'a>(bake: &'a CookieJar<'_>) -> Json<TopResponse> { 
    let mut bstring: HashMap<String, HashMap<String,usize>> = HashMap::new();
@@ -189,7 +213,7 @@ pub fn integer_this(it: PathBuf) -> String {
 
 #[shuttle_runtime::main]
 async fn main() -> shuttle_rocket::ShuttleRocket {
-    let rocket = rocket::build().mount("/", routes![index, fake, integer_this, calc_strength, elf_count, decode_cookie, bake_cookies]);
+    let rocket = rocket::build().mount("/", routes![index, fake, integer_this, calc_strength, elf_count, decode_cookie, bake_cookies, get_weight]);
 
     Ok(rocket.into())
 }
