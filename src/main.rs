@@ -83,6 +83,31 @@ pub struct Pokemon {
    weight: usize,
 }
 
+#[get("/8/drop/<val>")]
+async fn get_momentum(val: &str) -> String {
+      let query_string = format!("https://pokeapi.co/api/v2/pokemon/{}",val.parse::<usize>().unwrap());
+   let body = reqwest::get(query_string).await.expect("problem").text();
+   let mut long_body: String = body.await.expect("issue");
+   let mut split_body: Vec<_> = long_body.split(",").collect::<Vec<_>>();
+   let re = Regex::new(r"(:|})").unwrap();
+   let popped: Vec<_> = re.split(&split_body.last().unwrap()).collect();
+   let mut answer: String = String::new();
+   let mut momentum: f64 = 0.0;
+   for splitted_str in popped.iter() {
+      if let Ok(weight) = splitted_str.parse::<usize>() {
+         //first p = m * v momentum, mass, velocity
+	 //where Potential Energy = m *g*h mass, gravit accel and height
+	 let PE = weight as f64/10.0 * 9.825 * 10.0;
+	 println!("Potential Energy is {:?}", &PE);
+	 let vel: f64 = ((2.0 as f64) * (9.825 as f64) * (10.0 as f64)).sqrt();
+	 println!("velocity is {:?}", &vel);
+	 momentum = weight as f64/10.0 * vel;
+	 println!("momentum is {:?}", &momentum);
+         // Mv=M√2gh g = 9.825 m/s², h = 10.0 * weight
+         }
+      }
+   momentum.to_string()
+}
 
 #[get("/8/weight/<val>")]
 async fn get_weight(val: &str) -> String {
@@ -213,7 +238,7 @@ pub fn integer_this(it: PathBuf) -> String {
 
 #[shuttle_runtime::main]
 async fn main() -> shuttle_rocket::ShuttleRocket {
-    let rocket = rocket::build().mount("/", routes![index, fake, integer_this, calc_strength, elf_count, decode_cookie, bake_cookies, get_weight]);
+    let rocket = rocket::build().mount("/", routes![index, fake, integer_this, calc_strength, elf_count, decode_cookie, bake_cookies, get_weight, get_momentum]);
 
     Ok(rocket.into())
 }
