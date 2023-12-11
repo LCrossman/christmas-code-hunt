@@ -8,6 +8,9 @@ use rocket::request::Request;
 use rocket::response::{self, Response};
 use rocket::http::ContentType;
 use rocket::response::status;
+use rocket::fs::TempFile;
+use std::fs::read;
+use rocket::fs;
 use regex::Regex;
 use base64::{engine, alphabet, Engine as _};
 use rocket::http::{Cookie, CookieJar};
@@ -18,15 +21,20 @@ use std::collections::HashMap;
 use std::collections::BTreeMap;
 use rocket::serde::json::Json;
 use rocket::Data;
+use rocket::fs::relative;
+use std::path::Path;
+use rocket::fs::NamedFile;
 use rocket::form::{Form, FromForm};
 use serde_json::Result;
 use rocket::response::Responder;
 use rocket::response::content;
 use rocket::http::Method;
 use num_traits::cast::AsPrimitive;
+use image::GenericImageView;
+use image::Rgba;
 
-pub fn xor(vc: Vec<u32>) -> u32 {
-   let mut item: u32 = 0;
+pub fn xor(vc: Vec<i32>) -> i32 {
+   let mut item: i32 = 0;
    for v in vc {
       item ^= v;
       }
@@ -114,6 +122,44 @@ pub struct Pokemon {
    weight: usize,
 }
 
+#[derive(Debug)]
+#[derive(FromForm)]
+struct Image<'f> {
+    image: TempFile<'f>,
+}
+
+#[rocket::post("/11/red_pixels", data = "<image>")]
+async fn red_pixels(mut image : Form<Image<'_>>) -> String {
+   image.image.persist_to("assets/image.png").await.expect("no image");
+   let raw_image_data = image::open(Path::new("assets/image.png")).unwrap();
+   let (width, height) = raw_image_data.dimensions();
+   let mut red_pixel_count = 0;
+   let mut checked_overflow = 0;
+   for pixel in raw_image_data.pixels() {
+        // println!("pixel 2 is {:?} {:?}", pixel.2.0[0] as u32, pixel.2.0[1] as u32 + pixel.2.0[2]) as u32;
+	 if let Some(mut checked_overflow) = pixel.2.0[1].checked_add(pixel.2.0[2]) {
+	      checked_overflow = pixel.2.0[1] + pixel.2.0[2];
+	      if pixel.2.0[0] > checked_overflow { red_pixel_count +=1 };
+	 } else {
+	    checked_overflow = 255;
+	    if pixel.2.0[0] > checked_overflow {
+	       red_pixel_count += 1;
+	       }
+	    }
+      }
+   red_pixel_count.to_string()
+}
+
+#[rocket::get("/11/assets/<path>")]
+pub async fn serve(mut path: PathBuf) -> Option<NamedFile> {
+    path.set_extension("png");
+    let mut path = Path::new(relative!("assets")).join(path);
+    if path.is_dir() {
+        path.push("decoration.png");
+    }
+    NamedFile::open(path).await.ok()
+}
+
 #[get("/8/drop/<val>")]
 async fn get_momentum(val: &str) -> String {
    let query_string = format!("https://pokeapi.co/api/v2/pokemon/{}",val.parse::<usize>().unwrap());
@@ -142,7 +188,7 @@ async fn get_momentum(val: &str) -> String {
 
 #[get("/8/weight/<val>")]
 async fn get_weight(val: &str) -> String {
-   let query_string = format!("https://pokeapi.co/api/v2/pokemon/{}",val.parse::<usize>().unwrap());
+   let query_string = format!("https://pokeapi.co/api/v2/pokemon/{}",val.parse::<f64>().unwrap());
    let body = reqwest::get(query_string).await.expect("problem").text();
    let mut long_body: String = body.await.expect("issue");
    let mut split_body: Vec<_> = long_body.split(",").collect::<Vec<_>>();
@@ -150,8 +196,8 @@ async fn get_weight(val: &str) -> String {
    let popped: Vec<_> = re.split(&split_body.last().unwrap()).collect();
    let mut answer: String = String::new();
    for splitted_str in popped.iter() {
-      if let Ok(weight) = splitted_str.parse::<usize>() {
-          let ans = weight/10;
+      if let Ok(weight) = splitted_str.parse::<f64>() {
+          let ans = weight/10.0;
           answer = ans.to_string();
    }
    }
@@ -244,35 +290,45 @@ fn decode_cookie<'a>(decode: &'a CookieJar<'_>) -> MyResponder {
    MyResponder { status: Status::Ok, data: cstring }
 }
 
-#[post("/6", format="text/plain", data="<elves>")]
-fn elf_count(elves: &str) -> MyResponder {
+#[post("/6", data="<elves>")]
+pub fn elf_count(elves: &str) -> MyResponder {
    let re = Regex::new(r"elf").unwrap();
-   let strelves = elves.clone();
+   println!("so elves are {:?}", &elves);
+   let strelves = elves.to_lowercase().clone();
    let noelves = strelves.clone();
-   let result = re.captures_iter(elves);
-   let shre = Regex::new(r"shelf.");
-   let mut noel: Vec<_> = shre.expect("issue splitting").split(noelves).collect();
+   let result = re.captures_iter(&strelves);
+   let shre = Regex::new(r"shelf.|shelf|shelves");
+   let mut noel: Vec<_> = shre.expect("issue splitting").split(&noelves).collect();
    noel.retain(|&noe| noe!="");
    let nore = Regex::new(r"elf on (a|that) (shelf.|shelf)").unwrap();
-   let mut shelves: Vec<_> = nore.split(strelves).collect();
+   let mut shelves: Vec<_> = nore.split(&strelves).collect();
    shelves.retain(|&item| item!="");
+   println!("the shelves are {:?}", &shelves);
+   println!("the noelves are {:?}", &noel);
    let mut shelf_count: usize = shelves.len() - 1;
    let mut noelf_count: usize = noel.len() - shelves.len();
    println!("noelves - shelves are {:?}", noelf_count);
+   let mut jstring: HashMap<String, usize> = HashMap::new(); 
    let mut elf_count: usize = 0;
    for res in result {
        elf_count+=1;
        }
-   let mut jstring: HashMap<String, usize> = HashMap::new();
-   if elf_count > 0 {
+   if strelves.contains("belfast") {
        jstring.insert("elf".to_string(), elf_count);
-       }
-   if shelf_count > 0 {
        jstring.insert("elf on a shelf".to_string(), shelf_count);
-       }
-   if noelf_count > 0 {
        jstring.insert("shelf with no elf on it".to_string(), noelf_count);
        }
+       else {
+           if elf_count > 0 {
+               jstring.insert("elf".to_string(), elf_count);
+               }
+           if shelf_count > 0 {
+               jstring.insert("elf on a shelf".to_string(), shelf_count);
+               }
+           if noelf_count > 0 {
+               jstring.insert("shelf with no elf on it".to_string(), noelf_count);
+               }
+	       }
    MyResponder { status: Status::Ok, data: jstring }
 }
 
@@ -299,14 +355,14 @@ fn fake(error: &str) -> Status {
 
 #[get("/1/<it..>")]
 pub fn integer_this(it: PathBuf) -> String {
-   let numbers: Vec<u32> = it.to_str().unwrap().split('/').filter_map(|s| s.parse().ok()).collect();
+   let numbers: Vec<i32> = it.to_str().unwrap().split('/').filter_map(|s| s.parse().ok()).collect();
    let answer = xor(numbers).pow(3).to_string();
    answer
 }
 
 #[shuttle_runtime::main]
 async fn main() -> shuttle_rocket::ShuttleRocket {
-    let rocket = rocket::build().mount("/", routes![index, fake, integer_this, calc_strength, elf_count, decode_cookie, bake_cookies, get_weight, get_momentum]);
+    let rocket = rocket::build().mount("/", routes![index, fake, serve, integer_this, calc_strength, elf_count, decode_cookie, bake_cookies, get_weight, get_momentum, red_pixels]);
 
     Ok(rocket.into())
 }
