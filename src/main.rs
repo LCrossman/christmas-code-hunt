@@ -7,12 +7,15 @@ use std::io::Cursor;
 use rocket::request::Request;
 use rocket::response::{self, Response};
 use rocket::http::ContentType;
+use rocket::response::status;
 use regex::Regex;
 use base64::{engine, alphabet, Engine as _};
 use rocket::http::{Cookie, CookieJar};
 use base64::engine::general_purpose;
 use serde_json::json;
+use rocket::form::prelude::ErrorKind::Int;
 use std::collections::HashMap;
+use std::collections::BTreeMap;
 use rocket::serde::json::Json;
 use rocket::Data;
 use rocket::form::{Form, FromForm};
@@ -20,6 +23,7 @@ use serde_json::Result;
 use rocket::response::Responder;
 use rocket::response::content;
 use rocket::http::Method;
+use num_traits::cast::AsPrimitive;
 
 pub fn xor(vc: Vec<u32>) -> u32 {
    let mut item: u32 = 0;
@@ -61,22 +65,49 @@ impl<'r> Responder<'r,'r> for MyResponder {
     }
 }
 
-#[derive(Debug, Deserialize, serde::Serialize)]
+#[derive(Deserialize, Serialize)]
+#[serde(crate = "rocket::serde")]
+struct MyBakeResponder {
+  pub status: Status,
+  pub data: BTreeMap<(String, u32), BTreeMap<String, i32>>,
+}
+
+impl<'r> Responder<'r,'r> for MyBakeResponder {
+    fn respond_to(self, _: &rocket::Request<'_>) -> response::Result<'static> {
+          println!("data is in bake responder {:?}", &self.data);
+          let body = json!(self.data).to_string();
+          Response::build()
+            .status(self.status)
+            .header(ContentType::JSON)
+	    .sized_body(body.len(), Cursor::new(body))
+            .ok()
+    }
+}
+
+
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct TopResponse {
    recipe: BakeResponse,
    pantry: BakeResponse,
 }
 
-#[derive(Debug, Deserialize, serde::Serialize)]
-pub struct BakeResponse {
-   flour: usize,
-   sugar: usize,
-   butter: usize,
-   #[serde(rename = "baking powder")]
-   baking_powder: usize,
-   #[serde(rename = "chocolate chips")]
-   chocolate_chips: usize,
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct EndResponse {
+   cookies: i32,
+   pantry: BakeResponse,
 }
+
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct BakeResponse {
+   flour: i32,
+   sugar: i32,
+   butter: i32,
+   #[serde(rename = "baking powder")]
+   baking_powder: i32,
+   #[serde(rename = "chocolate chips")]
+   chocolate_chips: i32,
+}
+
 
 #[derive(Debug)]
 pub struct Pokemon {
@@ -85,8 +116,8 @@ pub struct Pokemon {
 
 #[get("/8/drop/<val>")]
 async fn get_momentum(val: &str) -> String {
-      let query_string = format!("https://pokeapi.co/api/v2/pokemon/{}",val.parse::<usize>().unwrap());
-   let body = reqwest::get(query_string).await.expect("problem").text();
+   let query_string = format!("https://pokeapi.co/api/v2/pokemon/{}",val.parse::<usize>().unwrap());
+   let body = reqwest::get(query_string).await.expect("problem with the reqwest call to API").text();
    let mut long_body: String = body.await.expect("issue");
    let mut split_body: Vec<_> = long_body.split(",").collect::<Vec<_>>();
    let re = Regex::new(r"(:|})").unwrap();
@@ -128,49 +159,86 @@ async fn get_weight(val: &str) -> String {
 }
 
 #[get("/7/bake")]
-fn bake_cookies<'a>(bake: &'a CookieJar<'_>) -> Json<TopResponse> { 
-   let mut bstring: HashMap<String, HashMap<String,usize>> = HashMap::new();
-   let purs = "";
-   let spur: TopResponse = TopResponse { recipe: BakeResponse {flour:0,sugar:0,butter:0,baking_powder:0,chocolate_chips:0}, pantry: BakeResponse { flour:0,sugar:0,butter:0,baking_powder:0,chocolate_chips:0} };
+fn bake_cookies<'a>(bake: &'a CookieJar<'_>) -> Json<EndResponse>  { 
+   let pantry_items: Vec<&str> = vec!["flour", "sugar", "butter", "baking_powder", "chocolate_chips"];
+   let mut flour_val: i32 = 0;
+   let mut flour_val_temp: i32 = 0;
+   let mut sugar_val: i32 = 0;
+   let mut sugar_val_temp: i32 = 0;
+   let mut butter_val: i32 = 0;
+   let mut butter_val_temp: i32 = 0;
+   let mut baking_powder_val: i32 = 0;
+   let mut baking_powder_temp: i32 = 0;
+   let mut chocolate_chips_val: i32 = 0;
+   let mut chocolate_chips_temp: i32 = 0;
+   let mut cookies = 0;
    for b in bake.iter() {
        if b.name() == "recipe" {
           let answer = b.value().as_bytes();
-	  let answer_decoded: Vec<u8> = general_purpose::STANDARD_NO_PAD.decode(answer).unwrap();
+	  let answer_decoded: Vec<u8> = general_purpose::STANDARD.decode(answer).unwrap();
 	  let final_purpose = String::from_utf8(answer_decoded).unwrap();
 	  let json_purpose = format!(r#"{}"#, &final_purpose);
 	  let spur: Result<TopResponse> = serde_json::from_str(&final_purpose);
-	  println!("spur {:?}", &spur);
-	}
+	  let pantry = &spur.as_ref().expect("problem with pantry").pantry;
+	  let recipe = &spur.as_ref().expect("issue with recipe").recipe;
+	  flour_val = pantry.flour as i32;
+	  sugar_val = pantry.sugar as i32;
+	  butter_val = pantry.butter as i32;
+	  baking_powder_val = pantry.baking_powder as i32;
+	  chocolate_chips_val = pantry.chocolate_chips as i32;
+	  let mut cnt = 0;
+	  'outer: loop {
+	     for item in pantry_items.iter() {
+	        match item {
+	            &"flour" => { if flour_val - recipe.flour as i32 > 0 { flour_val_temp = flour_val - recipe.flour as i32; } else { break 'outer; }},
+		    &"sugar" => { if sugar_val - recipe.sugar as i32 > 0 { sugar_val_temp = sugar_val - recipe.sugar as i32; } else {break 'outer; }},
+		    &"butter" => { if butter_val - recipe.butter as i32 > 0 { butter_val_temp = butter_val - recipe.butter as i32; } else {break 'outer;}},
+		    &"baking_powder" => { if baking_powder_val - recipe.baking_powder as i32 > 0 { baking_powder_temp = baking_powder_val - recipe.baking_powder as i32; } else { break 'outer; }},
+		    &"chocolate_chips" => { if chocolate_chips_val - recipe.chocolate_chips as i32 > 0 { chocolate_chips_temp = chocolate_chips_val - recipe.chocolate_chips as i32; } else { break 'outer; }},
+		    _ => break 'outer,
+	        }
+	     }
+	     flour_val = flour_val_temp;
+	     sugar_val = sugar_val_temp;
+	     butter_val = butter_val_temp;
+	     baking_powder_val = baking_powder_temp;
+	     chocolate_chips_val = chocolate_chips_temp;
+	     cnt+=1;     
+          };
+
+	  cookies = cnt;
     }
-    Json(spur)
+    }
+    Json(EndResponse { cookies: cookies, pantry: BakeResponse { flour: flour_val, sugar: sugar_val, butter: butter_val, baking_powder: baking_powder_val, chocolate_chips: chocolate_chips_val } })
 }
+
 
 #[get("/7/decode")]
 fn decode_cookie<'a>(decode: &'a CookieJar<'_>) -> MyResponder {
    let mut cstring: HashMap<String, usize> = HashMap::new();
    for c in decode.iter() {
       if c.name() == "recipe" {
-          let ans = c.value().replace(&['='][..],"");
           let answer = c.value().as_bytes();
-	  let encoded: String = general_purpose::STANDARD_NO_PAD.encode(b"data");
-	  //println!("all encoded {:?}", encoded);
-	  let gen_purpose: Vec<u8>= general_purpose::STANDARD_NO_PAD.decode(answer).unwrap();
+	  let gen_purpose: Vec<u8> = general_purpose::STANDARD.decode(answer).unwrap();
 	  let final_purpose = String::from_utf8(gen_purpose.to_vec()).unwrap();
+	  println!("so final_purpose is {:?}", &final_purpose);
 	  let s = final_purpose.replace(&['(', ')', '{', '}', '\"', '.', ';', '\''][..], "");
 	  let re = Regex::new(r"(:|,)").unwrap();
 	  let splitted_string: Vec<_> = re.split(&s).collect();
+	  println!("splitted string is {:?}", &splitted_string);
 	  let mut ingredient = "";
 	  let mut weight: usize = 0;
-	  for splitted_str in splitted_string.iter() {
+	  for splitted_str in splitted_string {
 	     if let Err(_) = splitted_str.parse::<usize>() {
 	         ingredient = splitted_str;
 		 println!("ingredient {:?}", &ingredient);
 		 }
 	     else {
 		 weight = splitted_str.parse::<usize>().unwrap();
+	         cstring.insert(ingredient.to_string(), weight);
 		 }
-	     cstring.insert(ingredient.to_string(), weight);
-	  }	 
+	    
+	  } 
 	  }
       }
    MyResponder { status: Status::Ok, data: cstring }
