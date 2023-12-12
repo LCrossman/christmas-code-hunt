@@ -9,8 +9,12 @@ use rocket::response::{self, Response};
 use rocket::http::ContentType;
 use rocket::response::status;
 use rocket::fs::TempFile;
+use chrono::{DateTime, Utc};
+use rocket::State;
 use std::fs::read;
 use rocket::fs;
+use std::sync::Mutex;
+use std::time::SystemTime;
 use regex::Regex;
 use base64::{engine, alphabet, Engine as _};
 use rocket::http::{Cookie, CookieJar};
@@ -27,11 +31,13 @@ use rocket::fs::NamedFile;
 use rocket::form::{Form, FromForm};
 use serde_json::Result;
 use rocket::response::Responder;
+use rocket::response::status::BadRequest;
 use rocket::response::content;
 use rocket::http::Method;
 use num_traits::cast::AsPrimitive;
 use image::GenericImageView;
 use image::Rgba;
+use shuttle_persist::PersistInstance;
 
 pub fn xor(vc: Vec<i32>) -> i32 {
    let mut item: i32 = 0;
@@ -59,7 +65,7 @@ struct Reindeer {
 #[serde(crate = "rocket::serde")]
 struct MyResponder {
   pub status: Status,
-  pub data: HashMap<String, usize>,
+  pub data: HashMap<String, i32>,
 }
 
 impl<'r> Responder<'r,'r> for MyResponder {
@@ -72,6 +78,7 @@ impl<'r> Responder<'r,'r> for MyResponder {
             .ok()
     }
 }
+
 
 #[derive(Deserialize, Serialize)]
 #[serde(crate = "rocket::serde")]
@@ -128,8 +135,55 @@ struct Image<'f> {
     image: TempFile<'f>,
 }
 
+//fn parse_datetime(datetime: &str) -> Result<DateTime<Utc>> {
+//    DateTime::parse_from_rfc2822(datetime).map(|dt| dt.with_timezone(&Utc))
+//}
+
+struct Memory {
+   data: Mutex<HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+struct MyString {
+  string_val: String,
+  datetime: SystemTime,
+}
+
+
+#[rocket::post("/12/save/<query>")]
+async fn store_data(query: &str, memory: &State<Memory>) -> String {
+   let current_time = SystemTime::now();
+   let datetime: DateTime<Utc> = current_time.into();
+   let datestring = datetime.to_rfc2822();
+   //let stored_string = MyString { string_val: query, datetime: current_time };
+   let mut data = memory.data.lock().unwrap();
+   data.insert(query.to_string(), datestring);
+   "data stored".to_string()
+}
+
+#[rocket::get("/12/load/<key>")]
+fn retrieve_data(key: String, memory: &State<Memory>) -> String {
+   let current_time = SystemTime::now();
+   let datetime: DateTime<Utc> = current_time.into();
+   let datestring = datetime.to_rfc2822();
+   let nowdate = DateTime::parse_from_rfc2822(&datestring).map(|dt| dt.with_timezone(&Utc)).unwrap();
+   let data = memory.data.lock().unwrap();
+   match data.get(&key) {
+      Some(value) => {
+        let orig_datetime = value;
+	let origdate = DateTime::parse_from_rfc2822(&orig_datetime).map(|dt| dt.with_timezone(&Utc)).unwrap();
+	let result = nowdate - origdate;
+        result.num_seconds().to_string()
+        
+	},
+	None => "no data found for that string".to_string(),
+	}
+}
+   //Json(stored_string)
+//}
+
 #[rocket::post("/11/red_pixels", data = "<image>")]
-async fn red_pixels(mut image : Form<Image<'_>>) -> String {
+async fn red_pixels(mut image: Form<Image<'_>>) -> String {
    image.image.persist_to("assets/image.png").await.expect("no image");
    let raw_image_data = image::open(Path::new("assets/image.png")).unwrap();
    let (width, height) = raw_image_data.dimensions();
@@ -261,9 +315,10 @@ fn bake_cookies<'a>(bake: &'a CookieJar<'_>) -> Json<EndResponse>  {
 
 #[get("/7/decode")]
 fn decode_cookie<'a>(decode: &'a CookieJar<'_>) -> MyResponder {
-   let mut cstring: HashMap<String, usize> = HashMap::new();
+   let mut cstring: HashMap<String, i32> = HashMap::new();
    for c in decode.iter() {
       if c.name() == "recipe" {
+          println!("c value is {:?}", &c.value());
           let answer = c.value().as_bytes();
 	  let gen_purpose: Vec<u8> = general_purpose::STANDARD.decode(answer).unwrap();
 	  let final_purpose = String::from_utf8(gen_purpose.to_vec()).unwrap();
@@ -273,20 +328,21 @@ fn decode_cookie<'a>(decode: &'a CookieJar<'_>) -> MyResponder {
 	  let splitted_string: Vec<_> = re.split(&s).collect();
 	  println!("splitted string is {:?}", &splitted_string);
 	  let mut ingredient = "";
-	  let mut weight: usize = 0;
+	  let mut weight: i32 = 0;
 	  for splitted_str in splitted_string {
-	     if let Err(_) = splitted_str.parse::<usize>() {
+	     if let Err(_) = splitted_str.parse::<i32>() {
 	         ingredient = splitted_str;
 		 println!("ingredient {:?}", &ingredient);
 		 }
 	     else {
-		 weight = splitted_str.parse::<usize>().unwrap();
+		 weight = splitted_str.parse::<i32>().unwrap();
 	         cstring.insert(ingredient.to_string(), weight);
 		 }
 	    
 	  } 
 	  }
       }
+   println!("cstring is {:?}", &cstring);
    MyResponder { status: Status::Ok, data: cstring }
 }
 
@@ -294,41 +350,49 @@ fn decode_cookie<'a>(decode: &'a CookieJar<'_>) -> MyResponder {
 pub fn elf_count(elves: &str) -> MyResponder {
    let re = Regex::new(r"elf").unwrap();
    println!("so elves are {:?}", &elves);
-   let strelves = elves.to_lowercase().clone();
+   let strelves = elves.clone();
    let noelves = strelves.clone();
    let result = re.captures_iter(&strelves);
    let shre = Regex::new(r"shelf.|shelf|shelves");
    let mut noel: Vec<_> = shre.expect("issue splitting").split(&noelves).collect();
    noel.retain(|&noe| noe!="");
-   let nore = Regex::new(r"elf on (a|that) (shelf.|shelf)").unwrap();
-   let mut shelves: Vec<_> = nore.split(&strelves).collect();
+   let nore = Regex::new(r"elf on a (shelf.|shelf)").unwrap();
+   //let mut shelves: Vec<_> = nore.matches(&strelves).into_iter().collect();
+   let mut shelves: Vec<_> = nore.split(&strelves).collect(); //.collect();
    shelves.retain(|&item| item!="");
    println!("the shelves are {:?}", &shelves);
+   //let repeat_elf: Vec<_> = re.find_iter(&joined_shelves).collect();
    println!("the noelves are {:?}", &noel);
-   let mut shelf_count: usize = shelves.len() - 1;
-   let mut noelf_count: usize = noel.len() - shelves.len();
+   let mut noelf_count: i32 = 0;
+   let is_punctuation = |c: char| c.is_ascii_punctuation();
+   let mut noelf_count: i32 = noel.len() as i32;
+   let mut shelf_count: i32 = shelves.len() as i32;
+   if !elves.trim_end_matches(is_punctuation).ends_with("elf on a shelf") {
+         println!("shelf match");
+         noelf_count -=1;
+	 }
+   noelf_count = noelf_count - shelf_count;
    println!("noelves - shelves are {:?}", noelf_count);
-   let mut jstring: HashMap<String, usize> = HashMap::new(); 
-   let mut elf_count: usize = 0;
+   let mut jstring: HashMap<String, i32> = HashMap::new(); 
+   let mut elf_count: i32 = 0;
    for res in result {
        elf_count+=1;
        }
-   if strelves.contains("belfast") {
-       jstring.insert("elf".to_string(), elf_count);
-       jstring.insert("elf on a shelf".to_string(), shelf_count);
-       jstring.insert("shelf with no elf on it".to_string(), noelf_count);
-       }
-       else {
-           if elf_count > 0 {
-               jstring.insert("elf".to_string(), elf_count);
-               }
-           if shelf_count > 0 {
-               jstring.insert("elf on a shelf".to_string(), shelf_count);
-               }
-           if noelf_count > 0 {
-               jstring.insert("shelf with no elf on it".to_string(), noelf_count);
-               }
-	       }
+   println!("shelves are {:?}", &shelves);
+   jstring.insert("elf".to_string(), elf_count);
+   jstring.insert("elf on a shelf".to_string(), shelf_count);
+   jstring.insert("shelf with no elf on it".to_string(), noelf_count);
+  // if elf_count > 0 {
+    //           jstring.insert("elf".to_string(), elf_count);
+      //         }
+        //  if shelf_count > 0 {
+          //     jstring.insert("elf on a shelf".to_string(), shelf_count);
+            //   }
+       //   if noelf_count > 0 {
+         //      jstring.insert("shelf with no elf on it".to_string(), noelf_count);
+           //    }
+   //let answer = serde_json::from_str(jstring).expect("none such");
+   
    MyResponder { status: Status::Ok, data: jstring }
 }
 
@@ -362,7 +426,10 @@ pub fn integer_this(it: PathBuf) -> String {
 
 #[shuttle_runtime::main]
 async fn main() -> shuttle_rocket::ShuttleRocket {
-    let rocket = rocket::build().mount("/", routes![index, fake, serve, integer_this, calc_strength, elf_count, decode_cookie, bake_cookies, get_weight, get_momentum, red_pixels]);
+    let rocket = rocket::build()
+    .manage(Memory { data:Mutex::new(HashMap::new()) })
+    .mount("/", routes![index, fake, serve, integer_this, calc_strength, elf_count, decode_cookie, bake_cookies, get_weight, get_momentum, red_pixels, store_data, retrieve_data]);
+    
 
     Ok(rocket.into())
 }
