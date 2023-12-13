@@ -123,6 +123,21 @@ pub struct BakeResponse {
    chocolate_chips: i32,
 }
 
+pub fn get_regexchar_matches(string_search: &str, reg_char: &Regex, search_char: &str, match_len: usize, expected_string: &str) -> i32 {
+    let mut counter: i32 = 0;
+    for (i,_) in string_search.char_indices() {
+        if let Some(cap) = reg_char.captures(&string_search[i..]) {
+            if cap[1].to_string() == search_char {
+                if i+match_len <= string_search.len() {
+                    if &string_search[i..i+match_len] == expected_string {
+                        counter+=1;
+                        }
+                }
+            }
+        }
+    }
+    counter
+}
 
 #[derive(Debug)]
 pub struct Pokemon {
@@ -135,9 +150,6 @@ struct Image<'f> {
     image: TempFile<'f>,
 }
 
-//fn parse_datetime(datetime: &str) -> Result<DateTime<Utc>> {
-//    DateTime::parse_from_rfc2822(datetime).map(|dt| dt.with_timezone(&Utc))
-//}
 
 struct Memory {
    data: Mutex<HashMap<String, String>>,
@@ -155,7 +167,6 @@ async fn store_data(query: &str, memory: &State<Memory>) -> String {
    let current_time = SystemTime::now();
    let datetime: DateTime<Utc> = current_time.into();
    let datestring = datetime.to_rfc2822();
-   //let stored_string = MyString { string_val: query, datetime: current_time };
    let mut data = memory.data.lock().unwrap();
    data.insert(query.to_string(), datestring);
    "data stored".to_string()
@@ -170,17 +181,14 @@ fn retrieve_data(key: String, memory: &State<Memory>) -> String {
    let data = memory.data.lock().unwrap();
    match data.get(&key) {
       Some(value) => {
-        let orig_datetime = value;
-	let origdate = DateTime::parse_from_rfc2822(&orig_datetime).map(|dt| dt.with_timezone(&Utc)).unwrap();
-	let result = nowdate - origdate;
-        result.num_seconds().to_string()
-        
-	},
-	None => "no data found for that string".to_string(),
-	}
+           let orig_datetime = value;
+	   let origdate = DateTime::parse_from_rfc2822(&orig_datetime).map(|dt| dt.with_timezone(&Utc)).unwrap();
+	   let result = nowdate - origdate;
+           result.num_seconds().to_string()   
+	   },
+	   None => "no data found for that string".to_string(),
+	   }
 }
-   //Json(stored_string)
-//}
 
 #[rocket::post("/11/red_pixels", data = "<image>")]
 async fn red_pixels(mut image: Form<Image<'_>>) -> String {
@@ -346,6 +354,7 @@ fn decode_cookie<'a>(decode: &'a CookieJar<'_>) -> MyResponder {
    MyResponder { status: Status::Ok, data: cstring }
 }
 
+
 #[post("/6", data="<elves>")]
 pub fn elf_count(elves: &str) -> MyResponder {
    let re = Regex::new(r"elf").unwrap();
@@ -353,35 +362,27 @@ pub fn elf_count(elves: &str) -> MyResponder {
    let strelves = elves.clone();
    let noelves = strelves.clone();
    let result = re.captures_iter(&strelves);
-   let shre = Regex::new(r"shelf.|shelf|shelves");
-   let mut noel: Vec<_> = shre.expect("issue splitting").split(&noelves).collect();
-   noel.retain(|&noe| noe!="");
-   let nore = Regex::new(r"elf on a (shelf.|shelf)").unwrap();
+   let re = Regex::new("^(e)").unwrap();
+   let shre = Regex::new("^(s)").unwrap();
+   let mut shelf_count = get_regexchar_matches(elves, &re, "e", 14, "elf on a shelf");
+   let mut noelf_count = get_regexchar_matches(elves, &shre, "s", 5, "shelf");
+   println!("shelf count {:?}", shelf_count);
+   println!("noelf count {:?}", noelf_count - shelf_count);
    //let mut shelves: Vec<_> = nore.matches(&strelves).into_iter().collect();
-   let mut shelves: Vec<_> = nore.split(&strelves).collect(); //.collect();
-   shelves.retain(|&item| item!="");
-   println!("the shelves are {:?}", &shelves);
-   //let repeat_elf: Vec<_> = re.find_iter(&joined_shelves).collect();
-   println!("the noelves are {:?}", &noel);
-   let mut noelf_count: i32 = 0;
-   let is_punctuation = |c: char| c.is_ascii_punctuation();
-   let mut noelf_count: i32 = noel.len() as i32;
-   let mut shelf_count: i32 = shelves.len() as i32;
-   if !elves.trim_end_matches(is_punctuation).ends_with("elf on a shelf") {
-         println!("shelf match");
-         noelf_count -=1;
-	 }
-   noelf_count = noelf_count - shelf_count;
-   println!("noelves - shelves are {:?}", noelf_count);
+   //shelves.retain(|&item| item!="");
+   //let is_punctuation = |c: char| c.is_ascii_punctuation();
+   //if !elves.trim_end_matches(is_punctuation).ends_with("elf on a shelf") {
+   //      println!("shelf match");
+   //      noelf_count -=1;
+   //	 }
    let mut jstring: HashMap<String, i32> = HashMap::new(); 
    let mut elf_count: i32 = 0;
    for res in result {
        elf_count+=1;
        }
-   println!("shelves are {:?}", &shelves);
    jstring.insert("elf".to_string(), elf_count);
    jstring.insert("elf on a shelf".to_string(), shelf_count);
-   jstring.insert("shelf with no elf on it".to_string(), noelf_count);
+   jstring.insert("shelf with no elf on it".to_string(), noelf_count - shelf_count);
   // if elf_count > 0 {
     //           jstring.insert("elf".to_string(), elf_count);
       //         }
