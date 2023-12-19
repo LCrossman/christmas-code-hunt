@@ -1,7 +1,7 @@
 use rocket::{get, routes};
 use rocket::http::Status;
 use std::path::PathBuf;
-use rocket::serde::{Deserialize, Serialize};
+//use rocket::serde::{Deserialize, Serialize};
 use rocket::post;
 use std::io::Cursor;
 use rocket::request::Request;
@@ -12,14 +12,21 @@ use rocket::fs::TempFile;
 use chrono::{DateTime, Utc};
 use rocket::State;
 use std::fs::read;
+use itertools::Itertools;
+use rocket::serde::json::Value;
 use rocket::fs;
+use handlebars::Handlebars;
 use std::sync::Mutex;
+use rocket::futures::StreamExt;
 use std::time::SystemTime;
+use sqlx::Row;
 use regex::Regex;
 use base64::{engine, alphabet, Engine as _};
 use rocket::http::{Cookie, CookieJar};
 use base64::engine::general_purpose;
 use serde_json::json;
+use sqlx::Column;
+use sqlx::ValueRef;
 use rocket::form::prelude::ErrorKind::Int;
 use std::collections::HashMap;
 use std::collections::BTreeMap;
@@ -34,10 +41,15 @@ use rocket::response::Responder;
 use rocket::response::status::BadRequest;
 use rocket::response::content;
 use rocket::http::Method;
+use serde::{Deserialize, Serialize};
+use sqlx::{Executor, FromRow, PgPool};
+use sqlx::query;
 use num_traits::cast::AsPrimitive;
 use image::GenericImageView;
 use image::Rgba;
+use sqlx::Postgres;
 use shuttle_persist::PersistInstance;
+use shuttle_runtime::CustomError;
 
 pub fn xor(vc: Vec<i32>) -> i32 {
    let mut item: i32 = 0;
@@ -84,12 +96,14 @@ impl<'r> Responder<'r,'r> for MyResponder {
 #[serde(crate = "rocket::serde")]
 struct MyBakeResponder {
   pub status: Status,
-  pub data: BTreeMap<(String, u32), BTreeMap<String, i32>>,
+  pub data: HashMap<(String, u32), HashMap<String, i64>>,
 }
 
 impl<'r> Responder<'r,'r> for MyBakeResponder {
     fn respond_to(self, _: &rocket::Request<'_>) -> response::Result<'static> {
           println!("data is in bake responder {:?}", &self.data);
+	  let body = serde_json::to_string_pretty(&self.data).unwrap();
+	  println!("body is {:?}", &body);
           let body = json!(self.data).to_string();
           Response::build()
             .status(self.status)
@@ -108,19 +122,19 @@ pub struct TopResponse {
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct EndResponse {
-   cookies: i32,
+   cookies: i64,
    pantry: BakeResponse,
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct BakeResponse {
-   flour: i32,
-   sugar: i32,
-   butter: i32,
+   flour: i64,
+   sugar: i64,
+   butter: i64,
    #[serde(rename = "baking powder")]
-   baking_powder: i32,
+   baking_powder: i64,
    #[serde(rename = "chocolate chips")]
-   chocolate_chips: i32,
+   chocolate_chips: i64,
 }
 
 pub fn get_regexchar_matches(string_search: &str, reg_char: &Regex, search_char: &str, match_len: usize, expected_string: &str) -> i32 {
@@ -150,6 +164,9 @@ struct Image<'f> {
     image: TempFile<'f>,
 }
 
+struct MyState {
+   pool: PgPool,
+}
 
 struct Memory {
    data: Mutex<HashMap<String, String>>,
@@ -161,6 +178,293 @@ struct MyString {
   datetime: SystemTime,
 }
 
+#[derive(Serialize, FromRow, Debug)]
+struct Todo {
+    pub id: i32,
+    pub note: String,
+}
+
+#[derive(Deserialize)]
+struct TodoNew {
+    pub note: String,
+}
+
+type OrdersNew = Vec<Orders>;
+
+#[derive(sqlx::Type)]
+#[derive(FromForm)]
+#[derive(Serialize, FromRow, Debug, Clone, Deserialize)]
+struct Orders {
+   pub id: i32,
+   pub region_id: i32,
+   pub gift_name: String,
+   pub quantity: i64,
+}
+
+type RegionsNew = Vec<Regions>;
+
+#[derive(sqlx::Type)]
+#[derive(FromForm)]
+#[derive(Serialize, Deserialize, FromRow, Debug, Clone)]
+struct Regions {
+   pub id: i32,
+   pub name: String,
+}
+
+
+#[derive(Deserialize)]
+struct NiceElf {
+    input: String,
+}
+
+fn is_nice_(chr: u8) -> bool {
+    matches!(chr as char, 'a' | 'e' | 'i' | 'o' | 'u' | 'y')
+}
+
+/// Generic moving window iterator over sequences to return k-mers
+///
+/// Iterator returns slices to the original data.
+ #[derive(Debug)]
+pub struct Kmers<'a> {
+    k: u8,
+    start_pos: usize,
+    buffer: &'a [u8],
+}
+
+impl<'a> Kmers<'a> {
+    pub fn new(buffer: &'a [u8], k: u8) -> Self {
+        Kmers {
+            k,
+            start_pos: 0,
+            buffer,
+        }
+    }
+}
+
+impl<'a> Iterator for Kmers<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.start_pos + self.k as usize > self.buffer.len() {
+            return None;
+        }
+        let pos = self.start_pos;
+        self.start_pos += 1;
+        Some(&self.buffer[pos..pos + self.k as usize])
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct Output {
+    region: String,
+    top_gifts: Vec<String>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct TopList {
+    region: String,
+    top_gifts: Vec<String>,
+}
+
+#[get("/18/regions/top_list/<number>")]
+async fn fetch_gifttotals(number: i32, state: &State<MyState>) -> Json<Vec<Output>> {
+     let num = if number == 0 { 1 } else { number };
+     let result = sqlx::query_as("WITH GiftRank AS (SELECT regions.name AS region, COALESCE(orders.gift_name::text, '') AS top_gift, SUM(orders.quantity) AS totalorders, RANK() OVER (PARTITION BY regions.name ORDER BY SUM(orders.quantity) DESC, orders.gift_name::text) AS rnk FROM regions LEFT JOIN orders ON orders.region_id = regions.id GROUP BY regions.name, orders.gift_name) SELECT region, ARRAY_AGG(top_gift) AS top_gifts FROM GiftRank WHERE rnk <= $1 GROUP BY region;")
+     .bind(num);
+     let answer: Vec<TopList> = result.fetch_all(&state.pool).await.expect("no thats not working");
+     let mut output_result: Vec<Output> = answer
+        .into_iter()
+        .map(|toplist| Output {
+            region: toplist.region,
+            top_gifts: toplist.top_gifts,
+        })
+        .collect();
+     for mut outres in output_result.iter_mut() {
+	if outres.top_gifts == vec![""] {
+	    outres.top_gifts.clear();
+	}
+	if number == 0 {
+	    outres.top_gifts.clear();
+	    }
+	}
+     output_result.sort_by(|a, b| a.region.cmp(&b.region));
+     Json(output_result)
+}
+
+
+#[derive(Debug, Serialize, FromRow)]
+struct Regional {
+    region: String,
+    total: i64,
+}
+
+#[get("/18/regions/total")]
+async fn fetch_regiontotals(state: &State<MyState>) -> Json<Vec<Regional>> {
+     let result = sqlx::query_as("SELECT name AS region, SUM(quantity) AS total FROM regions INNER JOIN orders ON orders.region_id = regions.id GROUP BY regions.name;");
+     let mut answer: Vec<Regional> = result.fetch_all(&state.pool).await.expect("no thats not working");
+     answer.sort_by(|a, b| a.region.cmp(&b.region));
+     Json(answer)
+}
+
+#[post("/18/orders", format="application/json", data="<data>")]
+async fn add_orders18(data: Json<OrdersNew>, state: &State<MyState>) {
+    println!("orders data {:?}", &data);
+    for ord in data.0.iter() {
+        println!("ord.id {:?} ord.region_id {:?}, ord.gift_name {:?}, ord.quantity {:?}", &ord.id, &ord.region_id, &ord.gift_name, &ord.quantity);
+        let answer = sqlx::query("INSERT INTO orders (id, region_id, gift_name, quantity) VALUES ($1, $2, $3, $4)")
+            .bind(ord.id)
+	    .bind(ord.region_id)
+	    .bind(ord.gift_name.clone())
+	    .bind(ord.quantity)
+	    .execute(&state.pool)
+	    .await
+	    .map_err(|e| BadRequest(e.to_string())).expect("inserting into orders error");
+	println!("answer is {:?}", answer);
+	}
+}
+
+
+#[post("/18/regions", data="<data>")]
+async fn add_regions(data: Json<RegionsNew>, state: &State<MyState>) {
+    println!("regions data {:?}", &data);
+    for regi in data.0.iter() {
+       let answer = sqlx::query("INSERT INTO regions (id, name) VALUES ($1, $2) ")
+           .bind(regi.id)
+	   .bind(regi.name.clone())
+	   .execute(&state.pool)
+	   .await
+	   .map_err(|e| BadRequest(e.to_string())).expect("inserting into regions error");
+       }
+}
+
+
+#[post("/18/reset")]
+async fn reset18(state: &State<MyState>) -> Status {
+    let _res = sqlx::query("DROP TABLE IF EXISTS regions;")
+    .execute(&state.pool)
+    .await.unwrap();
+    let _res2 = sqlx::query("DROP TABLE IF EXISTS orders;")
+    .execute(&state.pool)
+    .await.unwrap();
+    let _res3 = sqlx::query("CREATE TABLE regions ( id INT PRIMARY KEY, name VARCHAR(50));")
+    .execute(&state.pool)
+    .await.unwrap();
+    let _res4 = sqlx::query("CREATE TABLE orders ( id INT PRIMARY KEY, region_id INT, gift_name VARCHAR(50), quantity INT);")
+    .execute(&state.pool)
+    .await.unwrap();
+    Status::Ok
+}
+
+#[post("/15/nice", format="application/json", data="<data>")]
+async fn validate_nice(data: Json<NiceElf>) -> String {
+    let mut nice = 0;
+    let re = Regex::new(r"(a|e|i|o|u|y)").unwrap();
+    let naughty_list = vec!["ab".to_string(),"cd".to_string(),"pq".to_string(),"xy".to_string()];
+    let elfstring = &data.input;
+    println!("elfstring is {:?}", &elfstring);
+    if elfstring.len() <= 8 { nice+= 1; }
+    
+    if re.is_match(&data.input) {   
+        let k_iter = Kmers::new(elfstring.as_bytes(), 2);
+        for kit in k_iter {
+	     if String::from_utf8(kit.to_vec()).unwrap().chars().nth(0) == String::from_utf8(kit.to_vec()).unwrap().chars().nth(1) {
+	                println!("identikit {:?}", kit);
+			//if !String::from_utf8(kit.to_vec()).unwrap().chars().nth(0).expect("problem with nth statement").is_alphabetic() {
+			//    nice+=1;
+			//    }
+	                for naught in &naughty_list {
+	                    if naught == &String::from_utf8(kit.to_vec()).unwrap() {
+	                        nice+=1;
+		                }
+	                    }
+	               }
+	     }
+        }
+    if nice > 0 {
+        return format!("{{\"result\":\"naughty\"}}");
+	}
+    else {
+        return format!("{{\"result\":\"nice\"}}");
+	}
+}
+
+
+#[get("/13/orders/total")]
+async fn fetch_ordertotal(state: &State<MyState>) -> String {
+  //   let result = sqlx::query_scalar::<_, Orders>("SELECT SUM(quantity) FROM orders")
+     let result = sqlx::query("SELECT SUM(quantity) FROM orders;")
+        .fetch_one(&state.pool)
+	.await
+	.map_err(|e| BadRequest(e.to_string())).expect("sum total error");
+     let answer = result.try_get::<i64, _>(0).unwrap();
+     format!("{{\"total\":{:?}}}", answer)
+}
+
+#[post("/13/orders", data="<data>")]
+async fn add_orders(data: Json<OrdersNew>, state: &State<MyState>) {
+    for ord in data.0.iter() {
+        let answer = sqlx::query("INSERT INTO orders (id, region_id, gift_name, quantity) VALUES ($1, $2, $3, $4)")
+            .bind(ord.id)
+	    .bind(ord.region_id)
+	    .bind(ord.gift_name.clone())
+	    .bind(ord.quantity)
+	    .execute(&state.pool)
+	    .await
+	    .map_err(|e| BadRequest(e.to_string())).expect("inserting into orders error");
+	}
+}
+	
+    
+
+#[post("/13/reset")]
+async fn reset(state: &State<MyState>) -> Status {
+    let _res = sqlx::query("DROP TABLE IF EXISTS orders;")
+    .execute(&state.pool)
+    .await.unwrap();
+    let _res2 = sqlx::query("CREATE TABLE orders ( id INT PRIMARY KEY, region_id INT, gift_name VARCHAR(50), quantity INT);")
+    .execute(&state.pool)
+    .await.unwrap();
+    Status::Ok
+}
+
+#[derive(Deserialize)]
+struct Task14 {
+   content: String,
+}
+
+//#[post("/14/unsafe", type="application/json", data="<content>")]
+//async fn unsafe_provide(data: Json<Task14>) -> &'static str {
+ //   let mut handlebars = Handlebars::new();
+  //  let source = "{{ content }}";
+ //   println!(
+   //    "{}",
+ //      handlebars.render_template("{{content}}", &json!({"content":data.content}))?);
+    //let mut datahash = HashMap::new();
+    //datahash.insert("content", data.content);
+    //println!("{}", handlebars.render("content", &datahash).unwrap());
+//}
+    
+
+#[get("/13/sql")]
+async fn get_todo(state: &State<MyState>) -> String {
+    //let todo = sqlx::query_as::<_, Todo>("SELECT * FROM todos WHERE id = $1")
+    let todo = sqlx::query_as::<_, Todo>("SELECT * FROM todos WHERE id = 5")
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| BadRequest(e.to_string())).expect("serious error");
+    todo.note 
+}
+
+#[post("/13/add", data="<data>")]
+async fn add_todo(data: Json<TodoNew>,state: &State<MyState>,) {
+    let id = 5;
+    let todo = sqlx::query_as::<_, Todo>("INSERT INTO todos (id, note) VALUES (5, $2) returning id, note;")
+        .bind(id)
+        .bind(&data.note)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| BadRequest(e.to_string())).expect("cant add to db");
+}
 
 #[rocket::post("/12/save/<query>")]
 async fn store_data(query: &str, memory: &State<Memory>) -> String {
@@ -267,42 +571,43 @@ async fn get_weight(val: &str) -> String {
 }
 
 #[get("/7/bake")]
-fn bake_cookies<'a>(bake: &'a CookieJar<'_>) -> Json<EndResponse>  { 
+fn bake_cookies<'a>(bake: &'a CookieJar<'_>) -> Json<EndResponse> { 
    let pantry_items: Vec<&str> = vec!["flour", "sugar", "butter", "baking_powder", "chocolate_chips"];
-   let mut flour_val: i32 = 0;
-   let mut flour_val_temp: i32 = 0;
-   let mut sugar_val: i32 = 0;
-   let mut sugar_val_temp: i32 = 0;
-   let mut butter_val: i32 = 0;
-   let mut butter_val_temp: i32 = 0;
-   let mut baking_powder_val: i32 = 0;
-   let mut baking_powder_temp: i32 = 0;
-   let mut chocolate_chips_val: i32 = 0;
-   let mut chocolate_chips_temp: i32 = 0;
+   let mut flour_val: i64 = 0;
+   let mut flour_val_temp: i64 = 0;
+   let mut sugar_val: i64 = 0;
+   let mut sugar_val_temp: i64 = 0;
+   let mut butter_val: i64 = 0;
+   let mut butter_val_temp: i64 = 0;
+   let mut baking_powder_val: i64 = 0;
+   let mut baking_powder_temp: i64 = 0;
+   let mut chocolate_chips_val: i64 = 0;
+   let mut chocolate_chips_temp: i64 = 0;
    let mut cookies = 0;
    for b in bake.iter() {
        if b.name() == "recipe" {
           let answer = b.value().as_bytes();
 	  let answer_decoded: Vec<u8> = general_purpose::STANDARD.decode(answer).unwrap();
 	  let final_purpose = String::from_utf8(answer_decoded).unwrap();
-	  let json_purpose = format!(r#"{}"#, &final_purpose);
+	  let json_purpose = format!(r#"{}"#, &final_purpose);;
 	  let spur: Result<TopResponse> = serde_json::from_str(&final_purpose);
 	  let pantry = &spur.as_ref().expect("problem with pantry").pantry;
 	  let recipe = &spur.as_ref().expect("issue with recipe").recipe;
-	  flour_val = pantry.flour as i32;
-	  sugar_val = pantry.sugar as i32;
-	  butter_val = pantry.butter as i32;
-	  baking_powder_val = pantry.baking_powder as i32;
-	  chocolate_chips_val = pantry.chocolate_chips as i32;
+	  flour_val = pantry.flour as i64;
+	  sugar_val = pantry.sugar as i64;
+	  butter_val = pantry.butter as i64;
+	  baking_powder_val = pantry.baking_powder as i64;
+	  chocolate_chips_val = pantry.chocolate_chips as i64;
+	  println!("recipe {:?}", &recipe);
 	  let mut cnt = 0;
 	  'outer: loop {
 	     for item in pantry_items.iter() {
 	        match item {
-	            &"flour" => { if flour_val - recipe.flour as i32 > 0 { flour_val_temp = flour_val - recipe.flour as i32; } else { break 'outer; }},
-		    &"sugar" => { if sugar_val - recipe.sugar as i32 > 0 { sugar_val_temp = sugar_val - recipe.sugar as i32; } else {break 'outer; }},
-		    &"butter" => { if butter_val - recipe.butter as i32 > 0 { butter_val_temp = butter_val - recipe.butter as i32; } else {break 'outer;}},
-		    &"baking_powder" => { if baking_powder_val - recipe.baking_powder as i32 > 0 { baking_powder_temp = baking_powder_val - recipe.baking_powder as i32; } else { break 'outer; }},
-		    &"chocolate_chips" => { if chocolate_chips_val - recipe.chocolate_chips as i32 > 0 { chocolate_chips_temp = chocolate_chips_val - recipe.chocolate_chips as i32; } else { break 'outer; }},
+	            &"flour" => { if flour_val - recipe.flour as i64 >= 0 { flour_val_temp = flour_val - recipe.flour as i64; } else { break 'outer; }},
+		    &"sugar" => { if sugar_val - recipe.sugar as i64 >= 0 { sugar_val_temp = sugar_val - recipe.sugar as i64; } else {break 'outer; }},
+		    &"butter" => { if butter_val - recipe.butter as i64 >= 0 { butter_val_temp = butter_val - recipe.butter as i64; } else {break 'outer;}},
+		    &"baking_powder" => { if baking_powder_val - recipe.baking_powder as i64 >= 0 { baking_powder_temp = baking_powder_val - recipe.baking_powder as i64; } else { break 'outer; }},
+		    &"chocolate_chips" => { if chocolate_chips_val - recipe.chocolate_chips as i64 >= 0 { chocolate_chips_temp = chocolate_chips_val - recipe.chocolate_chips as i64; } else { break 'outer; }},
 		    _ => break 'outer,
 	        }
 	     }
@@ -317,41 +622,24 @@ fn bake_cookies<'a>(bake: &'a CookieJar<'_>) -> Json<EndResponse>  {
 	  cookies = cnt;
     }
     }
+    println!("cookies {:?}", &cookies);
+    println!("flour_val {:?} sugar_val {:?}, butter_val {:?} baking {:?} choc {:?}", &flour_val, &sugar_val, &butter_val, &baking_powder_val, &chocolate_chips_val);
     Json(EndResponse { cookies: cookies, pantry: BakeResponse { flour: flour_val, sugar: sugar_val, butter: butter_val, baking_powder: baking_powder_val, chocolate_chips: chocolate_chips_val } })
 }
 
 
 #[get("/7/decode")]
-fn decode_cookie<'a>(decode: &'a CookieJar<'_>) -> MyResponder {
-   let mut cstring: HashMap<String, i32> = HashMap::new();
+fn decode_cookie<'a>(decode: &'a CookieJar<'_>) -> String {
+   let mut final_purpose = String::new();
    for c in decode.iter() {
       if c.name() == "recipe" {
           println!("c value is {:?}", &c.value());
           let answer = c.value().as_bytes();
 	  let gen_purpose: Vec<u8> = general_purpose::STANDARD.decode(answer).unwrap();
-	  let final_purpose = String::from_utf8(gen_purpose.to_vec()).unwrap();
-	  println!("so final_purpose is {:?}", &final_purpose);
-	  let s = final_purpose.replace(&['(', ')', '{', '}', '\"', '.', ';', '\''][..], "");
-	  let re = Regex::new(r"(:|,)").unwrap();
-	  let splitted_string: Vec<_> = re.split(&s).collect();
-	  println!("splitted string is {:?}", &splitted_string);
-	  let mut ingredient = "";
-	  let mut weight: i32 = 0;
-	  for splitted_str in splitted_string {
-	     if let Err(_) = splitted_str.parse::<i32>() {
-	         ingredient = splitted_str;
-		 println!("ingredient {:?}", &ingredient);
-		 }
-	     else {
-		 weight = splitted_str.parse::<i32>().unwrap();
-	         cstring.insert(ingredient.to_string(), weight);
-		 }
-	    
-	  } 
+	  final_purpose = String::from_utf8(gen_purpose).unwrap();
 	  }
-      }
-   println!("cstring is {:?}", &cstring);
-   MyResponder { status: Status::Ok, data: cstring }
+	  }
+  final_purpose
 }
 
 
@@ -426,10 +714,16 @@ pub fn integer_this(it: PathBuf) -> String {
 }
 
 #[shuttle_runtime::main]
-async fn main() -> shuttle_rocket::ShuttleRocket {
+async fn main(#[shuttle_shared_db::Postgres] pool: PgPool) -> shuttle_rocket::ShuttleRocket {
+    pool.execute(include_str!("../schema.sql"))
+       .await.map_err(CustomError::new)?;
+
+    let state = MyState { pool };
     let rocket = rocket::build()
-    .manage(Memory { data:Mutex::new(HashMap::new()) })
-    .mount("/", routes![index, fake, serve, integer_this, calc_strength, elf_count, decode_cookie, bake_cookies, get_weight, get_momentum, red_pixels, store_data, retrieve_data]);
+     //Memory { data:Mutex::new(HashMap::new()) }, state)
+    .mount("/", routes![index, validate_nice, fetch_gifttotals, fetch_ordertotal, fetch_regiontotals, add_orders18, reset18, add_regions, fake, add_todo, get_todo, reset, add_orders, serve, store_data, retrieve_data, integer_this, calc_strength, elf_count, decode_cookie, bake_cookies, get_weight, get_momentum, red_pixels])
+    .manage(state)
+    .manage( Memory { data:Mutex::new(HashMap::new()) });
     
 
     Ok(rocket.into())
