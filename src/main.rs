@@ -12,10 +12,12 @@ use rocket::fs::TempFile;
 use chrono::{DateTime, Utc};
 use rocket::State;
 use std::fs::read;
+use sha256::{digest, try_digest};
 use itertools::Itertools;
 use rocket::serde::json::Value;
 use rocket::fs;
 use handlebars::Handlebars;
+use password_rules_parser::{parse_password_rules, CharacterClass};
 use std::sync::Mutex;
 use rocket::futures::StreamExt;
 use std::time::SystemTime;
@@ -266,6 +268,43 @@ struct TopList {
     top_gifts: Vec<String>,
 }
 
+pub fn count_element_function<I>(it: I) -> HashMap<I::Item, usize>
+where
+    I: IntoIterator,
+    I::Item: Eq + core::hash::Hash,
+{
+    let mut result = HashMap::new();
+
+    for item in it {
+           *result.entry(item).or_insert(0) += 1;
+    }
+
+    result
+}
+
+#[rocket::post("/22/integers", data="<integer_load>")]
+pub fn presents(integer_load: String) -> String {
+    //println!("integer_load is {:?}", integer_load);
+    let details: Vec<_> = integer_load.split('\n').collect();
+    let mut keep: Vec<_> = Vec::new();
+    for det in details {
+      keep.push(det);
+      }
+    let counted: HashMap<_,_> = count_element_function(keep);
+    let mut actual_result = 0;
+    for (k,v) in counted {
+       if k != "" {
+           //println!("k {:?} v is {:?}", &k, &v);
+	   if v == 1 {
+	       actual_result = k.parse::<usize>().unwrap();
+	       }
+	   }
+	   
+       }
+    "🎁".to_string().repeat(actual_result)
+}
+
+
 #[get("/18/regions/top_list/<number>")]
 async fn fetch_gifttotals(number: i32, state: &State<MyState>) -> Json<Vec<Output>> {
      let num = if number == 0 { 1 } else { number };
@@ -355,36 +394,196 @@ async fn reset18(state: &State<MyState>) -> Status {
     Status::Ok
 }
 
-#[post("/15/nice", format="application/json", data="<data>")]
-async fn validate_nice(data: Json<NiceElf>) -> String {
+#[derive(Responder)]
+enum GameElfResponse {
+    #[response(status = 200, content_type = "json")]
+    A(String),
+    #[response(status = 400, content_type = "json")]
+    B(String),
+    #[response(status = 406, content_type = "json")]
+    F(String),
+    #[response(status = 451, content_type = "json")]
+    G(String),
+    #[response(status = 416, content_type = "json")]
+    H(String),
+    #[response(status = 426, content_type = "json")]
+    I(String),
+    #[response(status = 418, content_type = "json")]
+    J(String),
+}
+
+#[derive(Responder)]
+enum NiceElfResponse {
+    #[response(status = 200, content_type = "json")]
+    A(String),
+    #[response(status = 400, content_type = "json")]
+    B(String),
+}
+
+#[post("/15/game", format="application/json", data="<data>")]
+async fn game_nice(data: Json<NiceElf>) -> GameElfResponse {
     let mut nice = 0;
-    let re = Regex::new(r"(a|e|i|o|u|y)").unwrap();
-    let naughty_list = vec!["ab".to_string(),"cd".to_string(),"pq".to_string(),"xy".to_string()];
+    let re = vec!['0','1','2','3','4','5','6','7','8','9'];
+    //let naughty_list = vec!["ab".to_string(),"cd".to_string(),"pq".to_string(),"xy".to_string()];
     let elfstring = &data.input;
     println!("elfstring is {:?}", &elfstring);
-    if elfstring.len() <= 8 { nice+= 1; }
+    //if elfstring == "2000.23.A joy joy" {
+    //    return GameElfResponse::F(format!("{{\"result\":\"naughty\",\"reason\":\"not joyful enough\"}}"));
+//	}
+    let elfsha = digest(elfstring);
+    if elfstring.len() < 8 { return GameElfResponse::B(format!("{{\"result\":\"naughty\",\"reason\":\"8 chars\"}}")); };
     
-    if re.is_match(&data.input) {   
+     // [U+2980..U+2BFF], [1F600..1F64F]";
+    let elfchars: Vec<_> = elfstring.chars().collect();
+    let has_lowercase = elfstring.chars().any(char::is_lowercase);
+    let has_uppercase = elfstring.chars().any(char::is_uppercase);
+    if has_lowercase == false {
+       return GameElfResponse::B(format!("{{\"result\":\"naughty\",\"reason\":\"more types of chars\"}}"));
+       }
+    if has_uppercase == false {
+       return GameElfResponse::B(format!("{{\"result\":\"naughty\",\"reason\":\"more types of chars\"}}"));
+       }
+    let mut digcount = 0;
+    let mut sumdig = 0;
+    let mut is_emojiflag = 0;
+    let mut joyflag = 0;
+    let mut sandwichflag = 0;
+    let mut rangeflag = 0;
+    let mut is_emoji = false;
+    let mut is_range = false;
+    for elf in &elfchars {
+       if re.contains(&elf) {
+           digcount +=1;
+	   }
+       is_emoji = match elf {
+              '\u{1F600}'..='\u{1F64F}' | // Emoticons
+              '\u{1F300}'..='\u{1F5FF}' | // Misc Symbols and Pictographs
+              '\u{1F680}'..='\u{1F6FF}' | // Transport and Map
+              '\u{1F1E0}'..='\u{1F1FF}' => true, // Flags
+              _ => false,
+	      };
+	if is_emoji == true {
+	    is_emojiflag+=1;
+	    }
+	is_range = match elf {
+	    '\u{2980}'..='\u{2BFF}' => true,
+	    _ => false
+	    };
+	//println!("range true {:?}", is_range);
+	if is_range == true {
+	    rangeflag+=1;
+	    }
+       }
+    let digits: Vec<&str> = elfstring.split(|c: char| !c.is_digit(10)).filter(|&s| !s.is_empty()).collect();
+    for dig in digits {
+        sumdig+= dig.parse::<u32>().unwrap();
+	}
+    //println!("digcount {:?}", &digcount);
+    //println!("sumdig is {:?}", &sumdig);
+    let mut joyflag1 = 1;
+    let mut joyflag2 = 1;
+    let mut joyflag3 = 1;
+    if digcount >= 5 {
+       if sumdig == 2023 {
+          for elf in elfchars.clone() {
+             if elf == 'j' {
+	        joyflag1 -= 1;
+		}
+             if elf == 'o' || elf == '0' && joyflag1 == 0 {
+	        joyflag2 -=1;
+		}
+	     if elf == 'y' && joyflag1 < 1 && joyflag2 == 0 {
+	        joyflag3 -=1;
+	        println!("allowed in joy");
+		}
+             //println!("elf is {:?} joyflag is {:?}", &elf, &joyflag);
+	     }
+	  }
+       else {
+        return GameElfResponse::B(format!("{{\"result\":\"naughty\",\"reason\":\"math is hard\"}}"));
+	}
+       }
+     else {
+        return GameElfResponse::B(format!("{{\"result\":\"naughty\",\"reason\":\"55555\"}}"));
+	}
+     for elf in elfchars.clone() {
+	     if joyflag1 == 0 && joyflag2 == 0 && joyflag3 == 0 {
+                     let k_iter = Kmers::new(elfstring.as_bytes(), 3);
+                     for kit in k_iter {
+		         //println!("kit is {:?}", &String::from_utf8_lossy(kit));
+	                 if String::from_utf8_lossy(kit).chars().nth(0) == String::from_utf8_lossy(kit).chars().nth(2) {
+	                    //println!("identikit {:?}", kit);
+			    if String::from_utf8_lossy(kit).chars().nth(0).expect("problem with nth statement").is_alphabetic() { //|| String::from_utf8(kit.to_vec()).unwrap().chars().nth(0).unwrap() == '0'  {
+			        sandwichflag+=1;
+			    }     
+	               }
+		      }
+		      //println!("sandwich flag is {:?}", sandwichflag);
+		      if sandwichflag == 0 {
+		           return GameElfResponse::G(format!("{{\"result\":\"naughty\",\"reason\":\"illegal: no sandwich\"}}"));
+			   }
+		      if rangeflag < 1 {
+		          return GameElfResponse::H(format!("{{\"result\":\"naughty\",\"reason\":\"outranged\"}}"));
+			  }
+		      if is_emojiflag < 1 {
+		          return GameElfResponse::I(format!("{{\"result\":\"naughty\",\"reason\":\"😳\"}}"));
+			  }
+	              if !elfsha.ends_with("a") {
+		          nice+=1;
+		          return GameElfResponse::J(format!("{{\"result\":\"naughty\",\"reason\":\"not a coffee brewer\"}}"));
+		          }
+		  }
+		 else {
+	              return GameElfResponse::F(format!("{{\"result\":\"naughty\",\"reason\":\"not joyful enough\"}}"));
+	              }
+	     }
+    if nice > 0 {
+        return GameElfResponse::B(format!("{{\"result\":\"naughty\"}}"))
+	
+	}
+    else {
+        return GameElfResponse::A(format!("{{\"result\":\"nice\",\"reason\":\"that's a nice password\"}}"))
+	}
+}
+
+#[post("/15/nice", format="application/json", data="<data>")]
+async fn validate_nice(data: Json<NiceElf>) -> NiceElfResponse {
+    let mut nice = 0;
+    let re = vec!['a','e','i','o','u','y'];
+    let naughty_list = vec!["ab".to_string(),"cd".to_string(),"pq".to_string(),"xy".to_string()];
+    let elfstring = &data.input;
+    let mut flag = 0;
+    println!("elfstring is {:?}", &elfstring);
+    let elfchars: Vec<_> = elfstring.chars().collect();
+    let mut vowelcount = 0;
+    for elf in elfchars {
+       if re.contains(&elf) {
+           vowelcount+=1;
+	   }
+       }
+    if vowelcount >= 3 {
         let k_iter = Kmers::new(elfstring.as_bytes(), 2);
         for kit in k_iter {
-	     if String::from_utf8(kit.to_vec()).unwrap().chars().nth(0) == String::from_utf8(kit.to_vec()).unwrap().chars().nth(1) {
-	                println!("identikit {:?}", kit);
-			//if !String::from_utf8(kit.to_vec()).unwrap().chars().nth(0).expect("problem with nth statement").is_alphabetic() {
-			//    nice+=1;
-			//    }
-	                for naught in &naughty_list {
-	                    if naught == &String::from_utf8(kit.to_vec()).unwrap() {
+	     for naught in &naughty_list {
+	                    if &String::from_utf8(kit.to_vec()).unwrap() == naught {
 	                        nice+=1;
 		                }
 	                    }
+	     if String::from_utf8(kit.to_vec()).unwrap().chars().nth(0) == String::from_utf8(kit.to_vec()).unwrap().chars().nth(1) {
+	                println!("identikit {:?}", &String::from_utf8(kit.to_vec()).unwrap().chars().nth(0));
+			flag +=1;
+			if !String::from_utf8(kit.to_vec()).unwrap().chars().nth(0).expect("problem with nth statement").is_alphabetic() {
+			    nice+=1;
+			    }
+	                
 	               }
 	     }
         }
-    if nice > 0 {
-        return format!("{{\"result\":\"naughty\"}}");
+    if nice > 0 || flag < 1  {
+        NiceElfResponse::B(format!("{{\"result\":\"naughty\"}}"))
 	}
     else {
-        return format!("{{\"result\":\"nice\"}}");
+        NiceElfResponse::A(format!("{{\"result\":\"nice\"}}"))
 	}
 }
 
@@ -685,6 +884,78 @@ pub fn elf_count(elves: &str) -> MyResponder {
    MyResponder { status: Status::Ok, data: jstring }
 }
 
+#[derive(Debug)]
+#[derive(FromForm)]
+#[derive(Deserialize)]
+struct params {
+   #[field(default = 0)]
+   offset: usize,
+   #[field(default = 1000)]
+   limits: usize,
+   #[field(default = 1000)]
+   limit: usize,
+   #[field(default = 0)]
+   split: usize,
+}
+
+#[derive(Debug)]
+#[derive(FromForm)]
+#[derive(Deserialize)]
+struct grinchnames {
+    fullnames: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum MyReturn {
+    Single(Vec<String>),
+    Double(Vec<Vec<String>>),
+}
+
+#[post("/5?<params..>", format = "application/json", data="<grinchnames>")]
+pub fn grinch(params: params, grinchnames: Json<Vec<String>>) -> status::Custom<Json<MyReturn>> {
+    let offsety = params.offset;
+    let limity = params.limits;
+    let limitsy = params.limit;
+    let splity = params.split;
+    println!("actual params {:?}", &params);
+    //let offsetlimits: Vec<_> = details.split('?').collect();
+    println!("details is {:?}", grinchnames);
+    println!("offset {:?} limits {:?} split {:?}", &offsety, &limity, &splity);
+    let fullnames = grinchnames;
+    if splity == 0 {
+        let mut results: Vec<_> = Vec::new();
+        if limitsy >= 0 && limitsy < fullnames.len() {
+	    println!("in top");
+            results = fullnames[offsety..offsety+limitsy].to_vec();
+	    }
+        else {
+	    println!("in sec");
+            results = fullnames[offsety..fullnames.len()].to_vec();
+	     }
+	return status::Custom(Status::Ok, Json(MyReturn::Single(results.into())));
+   }
+   else {
+      let dst: &Vec<Vec<_>> = &fullnames[offsety..fullnames.len()].chunks(splity).map(|s| s.to_vec()).collect();
+      let mut answer = Vec::new();
+      for (idx, d) in dst.iter().enumerate() {
+         println!("idx {:?} d {:?}", &idx, &d);
+	 }
+      println!("limity is {:?} offset minus {:?}", limitsy, limitsy - offsety);
+      if limity > 0 && limitsy < dst.len() {
+         answer = dst[0..limitsy].to_vec();
+	 println!("answer is {:?}", answer);
+      }
+      else {
+         answer = dst.to_vec();
+	 println!("last bit");
+	 }
+      return status::Custom(Status::Ok, Json(MyReturn::Double(answer.clone().into())));
+
+      }
+}
+
+
 #[post("/4/strength", format = "application/json", data="<strength>")]
 fn calc_strength(strength: &str) -> String {
     let r: Vec<Reindeer> = serde_json::from_str(strength).expect("none such");
@@ -721,7 +992,7 @@ async fn main(#[shuttle_shared_db::Postgres] pool: PgPool) -> shuttle_rocket::Sh
     let state = MyState { pool };
     let rocket = rocket::build()
      //Memory { data:Mutex::new(HashMap::new()) }, state)
-    .mount("/", routes![index, validate_nice, fetch_gifttotals, fetch_ordertotal, fetch_regiontotals, add_orders18, reset18, add_regions, fake, add_todo, get_todo, reset, add_orders, serve, store_data, retrieve_data, integer_this, calc_strength, elf_count, decode_cookie, bake_cookies, get_weight, get_momentum, red_pixels])
+    .mount("/", routes![presents, index, validate_nice, fetch_gifttotals, fetch_ordertotal, fetch_regiontotals, add_orders18, reset18, add_regions, fake, add_todo, get_todo, reset, add_orders, serve, store_data, retrieve_data, integer_this, calc_strength, elf_count, game_nice, decode_cookie, bake_cookies, grinch, get_weight, get_momentum, red_pixels])
     .manage(state)
     .manage( Memory { data:Mutex::new(HashMap::new()) });
     
