@@ -1342,6 +1342,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper-rustls"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec3efd23720e2049821a693cbc7e65ea87c72f1c58ff2f9522ff332b1491e590"
+dependencies = [
+ "futures-util",
+ "http",
+ "hyper",
+ "rustls",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "hyper-timeout"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2622,6 +2636,7 @@ dependencies = [
  "http",
  "http-body",
  "hyper",
+ "hyper-rustls",
  "hyper-tls",
  "ipnet",
  "js-sys",
@@ -2632,6 +2647,8 @@ dependencies = [
  "once_cell",
  "percent-encoding",
  "pin-project-lite",
+ "rustls",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -2646,6 +2663,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
+ "webpki-roots",
  "winreg",
 ]
 
@@ -2838,6 +2856,15 @@ dependencies = [
  "ring",
  "rustls-webpki",
  "sct",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c74cae0a4cf6ccbbf5f359f08efdf8ee7e1dc532573bf0db71968cb56b1448c"
+dependencies = [
+ "base64",
 ]
 
 [[package]]
@@ -3056,9 +3083,9 @@ dependencies = [
 
 [[package]]
 name = "shuttle-codegen"
-version = "0.35.1"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b99c06b8adfb88b971c2bc2662252a6ec85f4e041c7b0add64499fbdfd71b18"
+checksum = "1deb164f8f4040aca50e2462d2a0e6ff72acf51dbe58a598032f1da620b79abc"
 dependencies = [
  "proc-macro-error",
  "proc-macro2 1.0.70",
@@ -3068,9 +3095,9 @@ dependencies = [
 
 [[package]]
 name = "shuttle-common"
-version = "0.35.1"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e1ba1b036ce303eba6982c7a9d43021d121ccba84db43c3c264f8bf22b6bdb7"
+checksum = "530dd92ef335d91dcb77bda0d6afea7dc3c455ac6945c9f9ccebc5226bb6b9af"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3090,6 +3117,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "pin-project",
+ "reqwest",
  "rustrict",
  "semver",
  "serde",
@@ -3112,9 +3140,9 @@ dependencies = [
 
 [[package]]
 name = "shuttle-persist"
-version = "0.35.0"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fef66a434ef0f503f452392b6abd4d520d2e45c5a019ca34ac586460cb4a5e28"
+checksum = "4ae26a117845847a8a93d367c7cf3b7ca452eb1a107521d821d9c3238167e54c"
 dependencies = [
  "async-trait",
  "bincode",
@@ -3125,9 +3153,9 @@ dependencies = [
 
 [[package]]
 name = "shuttle-proto"
-version = "0.35.1"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f86275eabcc469d6749d4dc2e091f6e120f04fde813cf7002e5dc60158ce571b"
+checksum = "95532371eb7055651f4cb937b0e6522c75f9eb531e19b62b7428a05505574ba9"
 dependencies = [
  "futures-core",
  "prost 0.12.3",
@@ -3138,9 +3166,9 @@ dependencies = [
 
 [[package]]
 name = "shuttle-rocket"
-version = "0.35.1"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "039351d05cd141f49fe34d05383ef3cf4f9feb7a003b07febc61bf094b54c43f"
+checksum = "398f487f77dd1bd03d06d363cf2020e257d0949a36f6afbd770c477a7b659ce0"
 dependencies = [
  "rocket",
  "shuttle-runtime",
@@ -3148,9 +3176,9 @@ dependencies = [
 
 [[package]]
 name = "shuttle-runtime"
-version = "0.35.1"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e057c62f2f77368591117411e8de4458f6df33d0c157875c96025c2435e0811f"
+checksum = "96222129180f38195d65bb65813ed5a3d72c351492c5f340c1c26e5e71e82088"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3174,23 +3202,24 @@ dependencies = [
 
 [[package]]
 name = "shuttle-service"
-version = "0.35.1"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46d7b998a1137b4aa55190549b1ab71c5c834531776358599925ed23c27e4b86"
+checksum = "778d4684362e19634d7124c3efbf08716e247d2c48498b5ad3cc03f53b23f08a"
 dependencies = [
  "anyhow",
  "async-trait",
  "serde",
  "shuttle-common",
+ "shuttle-proto",
  "strfmt",
  "thiserror",
 ]
 
 [[package]]
 name = "shuttle-shared-db"
-version = "0.35.1"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a4400d2d94c874fa6c07f8bec2e1a45e38bafee44903cb9a0a513cc17cd323e"
+checksum = "a8d346d6d279774628ddb074cb0749a26b53a6f8b97df7ba75c0ad9c6f0f4a05"
 dependencies = [
  "async-trait",
  "serde",
@@ -4466,6 +4495,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "webpki-roots"
+version = "0.25.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1778a42e8b3b90bff8d0f5032bf22250792889a5cdc752aa0020c84abe3aaf10"
+
+[[package]]
 name = "weezl"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4679,18 +4714,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.7.30"
+version = "0.7.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "306dca4455518f1f31635ec308b6b3e4eb1b11758cefafc782827d0aa7acb5c7"
+checksum = "74d4d3961e53fa4c9a25a8637fc2bfaf2595b3d3ae34875568a5cf64787716be"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.7.30"
+version = "0.7.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be912bf68235a88fbefd1b73415cb218405958d1655b2ece9035a19920bdf6ba"
+checksum = "9ce1b18ccd8e73a9321186f97e46f9f04b778851177567b1975109d26a08d2a6"
 dependencies = [
  "proc-macro2 1.0.70",
  "quote 1.0.33",
